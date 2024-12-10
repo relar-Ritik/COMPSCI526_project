@@ -1,0 +1,115 @@
+import os
+import time
+import pandas as pd
+import torch
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    pipeline
+)
+
+CATEGORIES = [
+    "history of suicide attempt",
+    "history of depression and other mental illnesses",
+    "serious physical illness",
+    "criminal/legal problem",
+    "job/financial problems",
+    "impulsive or aggressive tendencies",
+    "substance use",
+    "adverse childhood experiences",
+    "sense of hopelessness",
+    "violence victimization and/or perpetration",
+    "academic stress",
+    "bullying",
+    "family/loved one's history of suicide",
+    "loss of relationships",
+    "high conflict or violent relationships",
+    "social isolation",
+    "lack of access to healthcare",
+    "suicide cluster in the community",
+    "stress of acculturation",
+    "community violence",
+    "historical trauma",
+    "discrimination",
+    "stigma associated with help-seeking and mental illness",
+    "easy access to lethal means of suicide among people at risk",
+    "unsafe media portrayals of suicide",
+    "Others"
+]
+CATEGORIES_STRING = "\n".join(CATEGORIES)
+
+# Model setup
+MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
+
+
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4"
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    device_map="auto",
+    torch_dtype=torch.bfloat16,
+    quantization_config=quantization_config,
+)
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+text_generator = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    torch_dtype=torch.bfloat16,
+    device_map="auto"
+)
+
+# Function to classify a post
+def classify_post(text: str) -> str:
+    """
+    Classify a given post into one of the predefined categories using the model.
+
+    Args:
+        text (str): The post content to classify.
+
+    Returns:
+        str: The predicted category or 'not possible' if no category fits.
+    """
+    prompt = (
+        f"You are an expert psychologist helping a researcher improve suicide prevention guidelines. "
+        f"Classify the following post into one of these categories:\n{CATEGORIES_STRING}\n"
+        f"Only output one category and nothing else. If no category fits, output 'not possible'."
+    )
+    messages = [{"role": "user", "content": f"Post: {text}"}]
+    response = text_generator(messages, max_new_tokens=70)
+    return response[0]["generated_text"].strip()
+
+# Load dataset
+INPUT_FILE_PATH = '' ## Enter the file name generated through the analysis notebook
+OUTPUT_FILE_PATH = 'llm_inference.csv'
+
+df = pd.read_csv(INPUT_FILE_PATH)
+df['classification'] = None
+
+# Classify posts and track progress
+start_time = time.time()
+
+for idx, row in df.iterrows():
+    try:
+        classification = classify_post(row['selftext'])
+        df.at[idx, 'classification'] = classification
+    except Exception as e:
+        print(f"Error processing row {idx}: {e}")
+    
+    if (idx + 1) % 500 == 0:
+        print(f"Processed {idx + 1}/{len(df)} posts")
+
+end_time = time.time()
+print(f"Total time taken: {end_time - start_time:.2f} seconds")
+
+# Save the results to a new CSV
+df.to_csv(OUTPUT_FILE_PATH, index=False)
+print(f"Classified posts saved to {OUTPUT_FILE_PATH}")

@@ -1,0 +1,6 @@
+zstandard
+pandas
+torch
+transformers
+bitsandbytes
+accelerate
